@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sync Meeting Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --teams-purple: #6264A7;
+            --teams-bg: #0b0b0b;
+            --teams-red: #C4314B;
+            --panel-bg: #1a1a1a;
+        }
+
+        body {
+            background-color: var(--teams-bg);
+            color: white;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            margin: 0; padding: 0; height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        /* Video Grid Logic */
+        #videoGrid {
+            flex: 1;
+            display: grid;
+            gap: 12px;
+            padding: 12px;
+            overflow-y: auto;
+            align-content: start;
+            padding-bottom: 100px; 
+        }
+
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        @media (max-width: 600px) {
+            .grid-cols-2 { grid-template-columns: 1fr; }
+        }
+
+        .video-tile {
+            background: #252423;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            border: 1px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+        .mirror { transform: scaleX(-1); }
+
+        .name-label {
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 10;
+        }
+
+        /* Fixed Footer Controls */
+        .footer-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 85px;
+            background: rgba(26, 26, 26, 0.95);
+            backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            padding-bottom: env(safe-area-inset-bottom);
+            border-top: 1px solid #333;
+            z-index: 500;
+        }
+
+        .btn-circle {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #333;
+            border: 1px solid #444;
+            transition: all 0.2s;
+            cursor: pointer;
+            color: white;
+        }
+        .btn-circle.off { background: var(--teams-red) !important; border-color: var(--teams-red); }
+        .btn-hangup { background: var(--teams-red); width: 65px; border-radius: 16px; border: none; }
+        
+        svg { width: 22px; height: 22px; fill: currentColor; }
+
+        /* Setup Screen Controls */
+        #setupView {
+            position: fixed; inset: 0; z-index: 1000;
+            background: var(--teams-bg);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+
+        .preview-controls {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+        }
+
+        #chatPanel {
+            position: fixed; top: 0; right: -100%; bottom: 85px;
+            width: 100%; max-width: 350px;
+            background: var(--panel-bg);
+            z-index: 600; transition: 0.3s;
+            border-left: 1px solid #333;
+            display: flex; flex-direction: column;
+        }
+        #chatPanel.open { right: 0; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. SETUP SCREEN -->
+    <div id="setupView">
+        <h1 class="text-2xl font-bold mb-6">Ready to join?</h1>
+        <div class="w-full max-w-sm mb-8 aspect-video bg-black rounded-xl overflow-hidden relative border-2 border-zinc-800 shadow-2xl">
+            <video id="previewVideo" autoplay playsinline muted class="mirror"></video>
+            <div id="camOffMsg" class="hidden absolute inset-0 flex items-center justify-center bg-zinc-900 text-zinc-500 text-sm">Camera is Off</div>
+            
+            <!-- Quick Toggle Buttons in Preview -->
+            <div class="preview-controls">
+                <button id="setupMicBtn" class="btn-circle scale-90" onclick="toggleMic()">
+                    <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                </button>
+                <button id="setupVidBtn" class="btn-circle scale-90" onclick="toggleVid()">
+                    <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="w-full max-w-xs space-y-4">
+            <input type="text" id="displayName" placeholder="Enter your name" class="w-full p-4 bg-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-[#6264A7]">
+            <button onclick="initCall('host')" class="w-full py-4 bg-[#6264A7] rounded-xl font-bold shadow-lg">Host Meeting</button>
+            <div class="flex gap-2">
+                <input type="text" id="joinId" placeholder="Meeting ID" class="flex-1 p-3 bg-zinc-800 rounded-xl text-sm outline-none">
+                <button onclick="initCall('join')" class="bg-zinc-700 px-6 rounded-xl font-bold text-sm">Join</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. MAIN CALL INTERFACE -->
+    <header id="callHeader" class="hidden p-4 flex justify-between items-center bg-[#0b0b0b] border-b border-zinc-900">
+        <div>
+            <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Live Meeting</span>
+            </div>
+            <button onclick="copyId()" class="text-[10px] text-zinc-600 hover:text-white" id="meetingIdDisplay">ID: --</button>
+        </div>
+        <button onclick="toggleChat()" class="p-2 hover:bg-zinc-800 rounded-lg">
+            <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+        </button>
+    </header>
+
+    <main id="videoGrid" class="hidden grid-cols-1"></main>
+
+    <footer id="callFooter" class="hidden footer-nav">
+        <button id="micBtn" class="btn-circle" onclick="toggleMic()">
+            <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+        </button>
+        <button id="vidBtn" class="btn-circle" onclick="toggleVid()">
+            <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        </button>
+        <button class="btn-circle btn-hangup" onclick="location.reload()">
+            <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+    </footer>
+
+    <div id="chatPanel">
+        <div class="p-4 border-b border-zinc-800 flex justify-between items-center bg-[#1a1a1a]">
+            <span class="font-bold">Chat</span>
+            <button onclick="toggleChat()" class="text-zinc-500">✕</button>
+        </div>
+        <div id="chatMessages" class="flex-1 p-4 overflow-y-auto space-y-3"></div>
+        <div class="p-3 bg-[#1a1a1a] flex gap-2 border-t border-zinc-800">
+            <input type="text" id="chatInput" placeholder="Type message..." class="flex-1 bg-zinc-800 rounded p-3 text-sm outline-none">
+            <button onclick="sendMsg()" class="text-[#6264A7] font-bold px-2">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let myStream, peer, myPeerId, myName;
+        let isMic = true, isVid = true;
+
+        async function getMedia() {
+            try {
+                myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('previewVideo').srcObject = myStream;
+            } catch (err) {
+                console.error("Media Error:", err);
+                alert("Please enable camera and mic access.");
+            }
+        }
+
+        function initCall(mode) {
+            myName = document.getElementById('displayName').value.trim() || "Guest";
+            const targetId = document.getElementById('joinId').value.trim();
+
+            if (mode === 'join' && !targetId) {
+                alert("Please enter a Meeting ID");
+                return;
+            }
+
+            peer = new Peer();
+            
+            peer.on('open', (id) => {
+                myPeerId = id;
+                document.getElementById('meetingIdDisplay').innerText = `ID: ${id} (Copy)`;
+                document.getElementById('setupView').style.display = 'none';
+                
+                document.getElementById('callHeader').classList.remove('hidden');
+                document.getElementById('videoGrid').classList.remove('hidden');
+                document.getElementById('callFooter').classList.remove('hidden');
+                
+                addVideoTile('me', myName + " (You)", myStream, true);
+
+                if (mode === 'join') {
+                    const call = peer.call(targetId, myStream, { metadata: { name: myName } });
+                    setupCallListeners(call);
+                }
+            });
+
+            peer.on('call', (call) => {
+                call.answer(myStream);
+                setupCallListeners(call);
+            });
+        }
+
+        function setupCallListeners(call) {
+            call.on('stream', (remoteStream) => {
+                const callerName = call.metadata?.name || "Remote Participant";
+                addVideoTile(call.peer, callerName, remoteStream, false);
+            });
+            call.on('close', () => removeVideoTile(call.peer));
+            call.on('error', () => removeVideoTile(call.peer));
+        }
+
+        function addVideoTile(id, name, stream, isMe) {
+            if (document.getElementById(`tile-${id}`)) return;
+
+            const grid = document.getElementById('videoGrid');
+            const tile = document.createElement('div');
+            tile.id = `tile-${id}`;
+            tile.className = 'video-tile';
+            
+            const vid = document.createElement('video');
+            vid.autoplay = true;
+            vid.playsinline = true;
+            vid.srcObject = stream;
+            if (isMe) {
+                vid.muted = true;
+                vid.classList.add('mirror');
+            }
+            
+            const label = document.createElement('div');
+            label.className = 'name-label';
+            label.innerText = name;
+            
+            tile.appendChild(vid);
+            tile.appendChild(label);
+            grid.appendChild(tile);
+
+            const count = grid.childElementCount;
+            grid.className = `hidden grid gap-3 p-3 overflow-y-auto ${count > 1 ? 'grid-cols-2' : 'grid-cols-1'}`;
+            grid.classList.remove('hidden');
+        }
+
+        function removeVideoTile(id) {
+            const tile = document.getElementById(`tile-${id}`);
+            if (tile) tile.remove();
+        }
+
+        function toggleMic() {
+            isMic = !isMic;
+            if (myStream) myStream.getAudioTracks()[0].enabled = isMic;
+            
+            // Sync both setup and call buttons
+            document.getElementById('micBtn').classList.toggle('off', !isMic);
+            document.getElementById('setupMicBtn').classList.toggle('off', !isMic);
+        }
+
+        function toggleVid() {
+            isVid = !isVid;
+            if (myStream) myStream.getVideoTracks()[0].enabled = isVid;
+            
+            // Sync both setup and call buttons
+            document.getElementById('vidBtn').classList.toggle('off', !isVid);
+            document.getElementById('setupVidBtn').classList.toggle('off', !isVid);
+            document.getElementById('camOffMsg').classList.toggle('hidden', isVid);
+        }
+
+        function toggleChat() {
+            document.getElementById('chatPanel').classList.toggle('open');
+        }
+
+        function copyId() {
+            const el = document.createElement('textarea');
+            el.value = myPeerId;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            alert("ID Copied!");
+        }
+
+        function sendMsg() {
+            const input = document.getElementById('chatInput');
+            if (!input.value.trim()) return;
+            const box = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = "bg-zinc-800 p-3 rounded-xl max-w-[85%] self-end ml-auto text-sm";
+            div.innerHTML = `<span class="text-[10px] opacity-40 block mb-1">You</span>${input.value}`;
+            box.appendChild(div);
+            input.value = "";
+            box.scrollTop = box.scrollHeight;
+        }
+
+        window.onload = getMedia;
+    </script>
+</body>
+</html>
